@@ -1,6 +1,6 @@
 "use strict";
 
-const { Plugin, PluginSettingTab, Setting, ItemView, SuggestModal, Notice } = require("obsidian");
+const { Plugin, PluginSettingTab, Setting, ItemView, SuggestModal, Notice, setIcon } = require("obsidian");
 const fs = require("fs");
 const path = require("path");
 const { pathToFileURL } = require("url");
@@ -78,12 +78,23 @@ function navigateWebview(webview, url) {
   webview.src = url;
 }
 
+function captureDefaultUserAgent(webview) {
+  if (!webview || webview.__foxDefaultUa) return;
+  try {
+    if (typeof webview.getUserAgent === "function") webview.__foxDefaultUa = webview.getUserAgent();
+  } catch (error) {
+    console.error(error);
+  }
+}
+
 function applyUserAgent(webview, userAgent) {
   if (!webview || typeof webview.setUserAgent !== "function") return;
+  captureDefaultUserAgent(webview);
   const value = String(userAgent || "").trim();
-  if (!value) return;
+  const next = value || webview.__foxDefaultUa;
+  if (!next) return;
   try {
-    webview.setUserAgent(value);
+    webview.setUserAgent(next);
   } catch (error) {
     console.error(error);
   }
@@ -139,8 +150,8 @@ class ContainerView extends ItemView {
       this.leaf.tabHeaderEl.style.setProperty("--fox-color", color);
       this.leaf.tabHeaderEl.toggleClass("fox-tab", true);
     }
-    const banner = this.contentEl.querySelector(".fox-banner");
-    if (banner) banner.style.background = color;
+    const chrome = this.contentEl.querySelector(".fox-chrome");
+    if (chrome) chrome.style.setProperty("--fox-color", color);
   }
 
   async mount() {
@@ -174,32 +185,54 @@ class ContainerView extends ItemView {
     const profile = rules.profileById(this.plugin.settings, found.profileId);
     const color = found.color || rules.colorFor(found.id);
 
-    const banner = this.contentEl.createDiv("fox-banner");
-    banner.style.background = color;
-    banner.createSpan({ text: found.name });
-    banner.createSpan({ cls: "fox-banner-meta", text: "→ " + profile.name });
+    const chrome = this.contentEl.createDiv("fox-chrome");
+    chrome.style.setProperty("--fox-color", color);
 
-    const bar = this.contentEl.createDiv("fox-bar");
-    const back = bar.createEl("button", { text: "←", cls: "fox-icon-btn" });
-    const reload = bar.createEl("button", { text: "↻", cls: "fox-icon-btn" });
-    const input = bar.createEl("input", { type: "text", placeholder: "https://target.example" });
+    const banner = chrome.createDiv("fox-banner");
+    banner.createSpan({ cls: "fox-banner-name", text: found.name });
+    banner.createSpan({ cls: "fox-banner-meta", text: profile.name });
+    const status = banner.createSpan({ cls: "fox-status", text: "Ready" });
+
+    const bar = chrome.createDiv("fox-bar");
+    const iconBtn = (parent, icon, title) => {
+      const btn = parent.createEl("button", { cls: "clickable-icon fox-icon-btn", attr: { "aria-label": title, title } });
+      setIcon(btn, icon);
+      return btn;
+    };
+
+    const back = iconBtn(bar, "arrow-left", "Back");
+    const reload = iconBtn(bar, "rotate-cw", "Reload");
+    const input = bar.createEl("input", { type: "text", placeholder: "Search or enter address", cls: "fox-address" });
     input.spellcheck = false;
-    const go = bar.createEl("button", { text: "Go", cls: "mod-cta" });
     this.address = input;
+    const go = iconBtn(bar, "arrow-right", "Go");
+    const more = iconBtn(bar, "ellipsis", "Tools");
 
-    const tools = this.contentEl.createDiv("fox-tools");
+    const tools = chrome.createDiv("fox-tools");
+    tools.hide();
     const ua = tools.createEl("input", {
       type: "text",
       placeholder: "User-Agent (empty = default)",
       value: found.userAgent || "",
+      cls: "fox-ua",
     });
     ua.spellcheck = false;
-    const saveUa = tools.createEl("button", { text: "UA" });
-    const clear = tools.createEl("button", { text: "Cookies" });
-    const devtools = tools.createEl("button", { text: "DevTools" });
+    const saveUa = iconBtn(tools, "check", "Save User-Agent");
+    const clear = iconBtn(tools, "trash-2", "Clear cookies");
+    const devtools = iconBtn(tools, "bug", "DevTools");
 
-    const status = this.contentEl.createDiv("fox-status");
-    status.setText("Ready - proxy " + profile.name);
+    more.addEventListener("click", () => {
+      if (tools.hasClass("is-open")) {
+        tools.removeClass("is-open");
+        tools.hide();
+        more.removeClass("is-active");
+      } else {
+        tools.addClass("is-open");
+        tools.show();
+        more.addClass("is-active");
+        ua.focus();
+      }
+    });
 
     const host = this.contentEl.createDiv("fox-frame");
     const doc = this.contentEl.doc || document;
@@ -227,13 +260,18 @@ class ContainerView extends ItemView {
       input.value = url;
     };
 
-    webview.addEventListener("dom-ready", () => applyUserAgent(webview, found.userAgent));
+    webview.addEventListener("dom-ready", () => {
+      captureDefaultUserAgent(webview);
+      applyUserAgent(webview, found.userAgent);
+    });
     webview.addEventListener("did-start-loading", () => {
-      status.setText("Loading…");
+      status.setText("Loading");
       this.contentEl.toggleClass("is-loading", true);
+      reload.toggleClass("is-spinning", true);
     });
     webview.addEventListener("did-stop-loading", () => {
       this.contentEl.toggleClass("is-loading", false);
+      reload.toggleClass("is-spinning", false);
       try {
         syncUrl(webview.getURL());
         status.setText(profile.name);
@@ -297,15 +335,14 @@ class ContainerView extends ItemView {
 
     saveUa.addEventListener("click", async () => {
       found.userAgent = ua.value.trim();
-      await this.plugin.saveSettings(false);
+      await this.plugin.saveSettings(false, { quiet: true });
       applyUserAgent(webview, found.userAgent);
-      new Notice(found.userAgent ? "User-Agent saved" : "User-Agent cleared (applies on next navigation)");
-      if (found.userAgent) {
-        try {
-          if (webview.getURL && webview.getURL() && webview.getURL() !== BLANK) webview.reload();
-        } catch (error) {
-          console.error(error);
-        }
+      new Notice(found.userAgent ? "User-Agent saved" : "User-Agent reset to default");
+      try {
+        const url = webview.getURL && webview.getURL();
+        if (url && url !== BLANK) webview.reload();
+      } catch (error) {
+        console.error(error);
       }
     });
     ua.addEventListener("keydown", (event) => {
