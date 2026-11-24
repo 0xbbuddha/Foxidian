@@ -1,6 +1,6 @@
 "use strict";
 
-const { Plugin, PluginSettingTab, Setting, ItemView, SuggestModal, Notice, setIcon } = require("obsidian");
+const { Plugin, PluginSettingTab, Setting, ItemView, SuggestModal, Modal, Menu, Notice, setIcon } = require("obsidian");
 const fs = require("fs");
 const path = require("path");
 const { pathToFileURL } = require("url");
@@ -38,7 +38,7 @@ const DEFAULTS = {
   enabled: false,
   interceptCerts: true,
   burpHost: "127.0.0.1",
-  burpPort: 8081,
+  burpPort: 8080,
   bypass: ["localhost", "127.0.0.1", "::1"],
   defaultProfile: "burp",
   extras: [],
@@ -52,11 +52,29 @@ function sessionApi() {
   return electron.remote.session;
 }
 
+// Same idea as Obsidian Web viewer: real URL → open it, otherwise search.
+const SEARCH_TEMPLATE = "https://duckduckgo.com/?q=%s";
+
+function looksLikeUrl(raw) {
+  const value = String(raw || "").trim();
+  if (!value || /\s/.test(value)) return false;
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(value)) return true;
+  if (/^(about|data|file|blob):/i.test(value)) return true;
+  if (/^(localhost|\[::1\])(:\d+)?([/?#]|$)/i.test(value)) return true;
+  if (/^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?([/?#]|$)/.test(value)) return true;
+  const host = (/^([^/?#]+)/.exec(value) || [""])[0];
+  const dot = host.lastIndexOf(".");
+  return dot !== -1 && dot !== host.length - 1;
+}
+
 function withUrl(raw) {
   const value = String(raw || "").trim();
   if (!value) return "";
-  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value)) return value;
-  return "https://" + value;
+  // Real schemes only (avoid treating "localhost:3000" as a scheme).
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(value)) return value;
+  if (/^(about|data|file|blob):/i.test(value)) return value;
+  if (looksLikeUrl(value)) return "https://" + value;
+  return SEARCH_TEMPLATE.replace("%s", encodeURIComponent(value));
 }
 
 function normalizeContainers(list) {
@@ -98,6 +116,134 @@ function applyUserAgent(webview, userAgent) {
   } catch (error) {
     console.error(error);
   }
+}
+
+const CERT_FAIL_CODES = new Set([
+  -200, -201, -202, -203, -204, -205, -206, -207, -208, -210, -211, -212, -213, -300,
+]);
+
+function isCertFailure(code, description) {
+  if (CERT_FAIL_CODES.has(Number(code))) return true;
+  return /CERT_|ERR_SSL|SSL_PROTOCOL|CERTIFICATE/i.test(String(description || ""));
+}
+
+function stampFile() {
+  return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+class UserAgentModal extends Modal {
+  constructor(app, value, onSubmit) {
+    super(app);
+    this.value = value || "";
+    this.onSubmit = onSubmit;
+  }
+
+  onOpen() {
+    this.titleEl.setText("User-Agent");
+    this.contentEl.createEl("p", {
+      cls: "fox-note",
+      text: "Leave empty to use the default browser User-Agent.",
+    });
+    const input = this.contentEl.createEl("input", {
+      type: "text",
+      value: this.value,
+      cls: "fox-ua-modal",
+      attr: { placeholder: "User-Agent" },
+    });
+    input.spellcheck = false;
+    const row = this.contentEl.createDiv("fox-ua-actions");
+    const cancel = row.createEl("button", { text: "Cancel" });
+    const save = row.createEl("button", { text: "Save", cls: "mod-cta" });
+    const commit = () => {
+      this.onSubmit(input.value.trim());
+      this.close();
+    };
+    cancel.addEventListener("click", () => this.close());
+    save.addEventListener("click", commit);
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        commit();
+      }
+    });
+    input.focus();
+    input.select();
+  }
+}
+
+// Native <input type="color"> is clipped inside the narrow sidebar. Modal has room.
+class ColorModal extends Modal {
+  constructor(app, value, onPick) {
+    super(app);
+    this.value = rules.validColor(value) ? value : "#2563eb";
+    this.onPick = onPick;
+  }
+
+  onOpen() {
+    this.titleEl.setText("Container color");
+    this.modalEl.addClass("fox-color-modal");
+    const preview = this.contentEl.createDiv("fox-color-preview");
+    preview.style.background = this.value;
+
+    const presets = this.contentEl.createDiv("fox-color-presets");
+    for (const hex of rules.COLORS || []) {
+      const swatch = presets.createEl("button", {
+        cls: "fox-color-swatch",
+        attr: { type: "button", title: hex, "aria-label": hex },
+      });
+      swatch.style.background = hex;
+      swatch.addEventListener("click", () => {
+        this.value = hex;
+        picker.value = hex;
+        hexInput.value = hex;
+        preview.style.background = hex;
+      });
+    }
+
+    const row = this.contentEl.createDiv("fox-color-row");
+    const picker = row.createEl("input", { type: "color", value: this.value, cls: "fox-color-picker" });
+    const hexInput = row.createEl("input", {
+      type: "text",
+      value: this.value,
+      cls: "fox-color-hex",
+      attr: { spellcheck: "false", maxlength: "7" },
+    });
+
+    const sync = (hex, live) => {
+      if (!rules.validColor(hex)) return;
+      this.value = hex;
+      picker.value = hex;
+      hexInput.value = hex;
+      preview.style.background = hex;
+      if (live) this.onPick(hex, true);
+    };
+    picker.addEventListener("input", () => sync(picker.value, true));
+    hexInput.addEventListener("input", () => {
+      const hex = hexInput.value.trim();
+      if (rules.validColor(hex)) sync(hex, true);
+    });
+
+    const actions = this.contentEl.createDiv("fox-ua-actions");
+    actions.createEl("button", { text: "Cancel" }).addEventListener("click", () => this.close());
+    actions.createEl("button", { text: "Save", cls: "mod-cta" }).addEventListener("click", () => {
+      if (!rules.validColor(this.value)) {
+        new Notice("Invalid color");
+        return;
+      }
+      this.onPick(this.value, false);
+      this.close();
+    });
+  }
+}
+
+function colorSwatch(parent, value, title) {
+  const btn = parent.createEl("button", {
+    cls: "fox-color",
+    attr: { type: "button", title: title || "Color", "aria-label": title || "Color" },
+  });
+  btn.style.background = value;
+  btn._foxColor = value;
+  return btn;
 }
 
 class ContainerView extends ItemView {
@@ -152,6 +298,16 @@ class ContainerView extends ItemView {
     }
     const chrome = this.contentEl.querySelector(".fox-chrome");
     if (chrome) chrome.style.setProperty("--fox-color", color);
+    if (this.proxyPill) {
+      const profile = rules.profileById(this.plugin.settings, found.profileId);
+      this.proxyPill.setText(profile ? profile.name : found.profileId);
+      this.proxyPill.toggleClass("is-direct", found.profileId === "direct");
+      this.proxyPill.toggleClass("is-proxy", found.profileId !== "direct");
+    }
+    if (this.bannerMeta) {
+      const profile = rules.profileById(this.plugin.settings, found.profileId);
+      this.bannerMeta.setText(profile ? profile.name : found.profileId);
+    }
   }
 
   async mount() {
@@ -182,7 +338,7 @@ class ContainerView extends ItemView {
     }
 
     this.paintChrome(found);
-    const profile = rules.profileById(this.plugin.settings, found.profileId);
+    let profile = rules.profileById(this.plugin.settings, found.profileId);
     const color = found.color || rules.colorFor(found.id);
 
     const chrome = this.contentEl.createDiv("fox-chrome");
@@ -190,7 +346,7 @@ class ContainerView extends ItemView {
 
     const banner = chrome.createDiv("fox-banner");
     banner.createSpan({ cls: "fox-banner-name", text: found.name });
-    banner.createSpan({ cls: "fox-banner-meta", text: profile.name });
+    const bannerMeta = banner.createSpan({ cls: "fox-banner-meta", text: profile.name });
     const status = banner.createSpan({ cls: "fox-status", text: "Ready" });
 
     const bar = chrome.createDiv("fox-bar");
@@ -202,37 +358,28 @@ class ContainerView extends ItemView {
 
     const back = iconBtn(bar, "arrow-left", "Back");
     const reload = iconBtn(bar, "rotate-cw", "Reload");
+    const pill = bar.createEl("button", {
+      cls: "fox-proxy-pill" + (found.profileId === "direct" ? " is-direct" : " is-proxy"),
+      text: profile.name,
+      attr: { type: "button", title: "Switch proxy profile", "aria-label": "Switch proxy profile" },
+    });
     const input = bar.createEl("input", { type: "text", placeholder: "Search or enter address", cls: "fox-address" });
     input.spellcheck = false;
     this.address = input;
+    this.proxyPill = pill;
+    this.bannerMeta = bannerMeta;
+    this.statusEl = status;
     const go = iconBtn(bar, "arrow-right", "Go");
-    const more = iconBtn(bar, "ellipsis", "Tools");
+    const more = iconBtn(bar, "ellipsis", "Page tools");
 
-    const tools = chrome.createDiv("fox-tools");
-    tools.hide();
-    const ua = tools.createEl("input", {
-      type: "text",
-      placeholder: "User-Agent (empty = default)",
-      value: found.userAgent || "",
-      cls: "fox-ua",
-    });
-    ua.spellcheck = false;
-    const saveUa = iconBtn(tools, "check", "Save User-Agent");
-    const clear = iconBtn(tools, "trash-2", "Clear cookies");
-    const devtools = iconBtn(tools, "bug", "DevTools");
-
-    more.addEventListener("click", () => {
-      if (tools.hasClass("is-open")) {
-        tools.removeClass("is-open");
-        tools.hide();
-        more.removeClass("is-active");
-      } else {
-        tools.addClass("is-open");
-        tools.show();
-        more.addClass("is-active");
-        ua.focus();
-      }
-    });
+    const syncProxyUi = () => {
+      profile = rules.profileById(this.plugin.settings, found.profileId) || profile;
+      const name = profile ? profile.name : found.profileId;
+      pill.setText(name);
+      pill.toggleClass("is-direct", found.profileId === "direct");
+      pill.toggleClass("is-proxy", found.profileId !== "direct");
+      bannerMeta.setText(name);
+    };
 
     const host = this.contentEl.createDiv("fox-frame");
     const doc = this.contentEl.doc || document;
@@ -255,6 +402,25 @@ class ContainerView extends ItemView {
 
     navigateWebview(webview, BLANK);
 
+    pill.addEventListener("click", async () => {
+      const profiles = rules.profilesOf(this.plugin.settings);
+      if (!profiles.length) return;
+      const idx = profiles.findIndex((item) => item.id === found.profileId);
+      const next = profiles[(idx + 1) % profiles.length];
+      found.profileId = next.id;
+      syncProxyUi();
+      try {
+        await this.plugin.saveSettings(false, { quiet: true });
+        await this.plugin.applyProfile(rules.partitionOf(found.id), found.profileId);
+        status.setText(next.name);
+        new Notice(found.name + " → " + next.name);
+        const url = webview.getURL && webview.getURL();
+        if (url && url !== BLANK) webview.reload();
+      } catch (error) {
+        new Notice("Proxy: " + error.message);
+      }
+    });
+
     const syncUrl = (url) => {
       if (!url || url === BLANK) return;
       input.value = url;
@@ -272,11 +438,12 @@ class ContainerView extends ItemView {
     webview.addEventListener("did-stop-loading", () => {
       this.contentEl.toggleClass("is-loading", false);
       reload.toggleClass("is-spinning", false);
+      const label = (rules.profileById(this.plugin.settings, found.profileId) || profile).name;
       try {
         syncUrl(webview.getURL());
-        status.setText(profile.name);
+        status.setText(label);
       } catch (error) {
-        status.setText(profile.name);
+        status.setText(label);
       }
     });
     webview.addEventListener("did-navigate", (event) => syncUrl(event.url));
@@ -286,8 +453,16 @@ class ContainerView extends ItemView {
     });
     webview.addEventListener("did-fail-load", (event) => {
       if (!event.isMainFrame || event.errorCode === -3) return;
-      status.setText("Failed " + event.errorCode + " - " + (event.errorDescription || ""));
-      new Notice("Navigation: " + (event.errorDescription || event.errorCode));
+      const desc = event.errorDescription || String(event.errorCode);
+      if (isCertFailure(event.errorCode, desc)) {
+        status.setText("Cert error - import Burp CA");
+        new Notice(
+          "HTTPS certificate rejected. Export Burp’s CA (Proxy → Proxy settings → Import / export CA) and trust it in the OS, or enable “Trust interceptor certificate” in Foxidian settings."
+        );
+        return;
+      }
+      status.setText("Failed " + event.errorCode + " - " + desc);
+      new Notice("Navigation: " + desc);
     });
 
     const load = () => {
@@ -333,45 +508,153 @@ class ContainerView extends ItemView {
       }
     });
 
-    saveUa.addEventListener("click", async () => {
-      found.userAgent = ua.value.trim();
-      await this.plugin.saveSettings(false, { quiet: true });
-      applyUserAgent(webview, found.userAgent);
-      new Notice(found.userAgent ? "User-Agent saved" : "User-Agent reset to default");
+    const currentUrl = () => {
       try {
-        const url = webview.getURL && webview.getURL();
-        if (url && url !== BLANK) webview.reload();
+        return webview.getURL && webview.getURL();
       } catch (error) {
-        console.error(error);
+        return "";
       }
-    });
-    ua.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        saveUa.click();
-      }
-    });
+    };
 
-    clear.addEventListener("click", async () => {
+    const cookiesForPage = async () => {
+      const session = sessionApi().fromPartition(rules.partitionOf(found.id));
+      const url = currentUrl();
+      if (url && /^https?:/i.test(url)) return { url, list: await session.cookies.get({ url }) };
+      return { url: url || null, list: await session.cookies.get({}) };
+    };
+
+    const doExportCookies = async () => {
+      try {
+        const { list } = await cookiesForPage();
+        if (!list.length) {
+          new Notice("No cookies for this page");
+          return;
+        }
+        const header = list.map((c) => c.name + "=" + c.value).join("; ");
+        await navigator.clipboard.writeText(header);
+        new Notice("Cookie header (" + list.length + ") copied");
+      } catch (error) {
+        new Notice("Cookies: " + error.message);
+      }
+    };
+
+    const doExportCookiesJson = async () => {
+      try {
+        const { url, list } = await cookiesForPage();
+        await navigator.clipboard.writeText(JSON.stringify(list, null, 2));
+        new Notice((list.length || 0) + " cookie(s) JSON copied" + (url ? " · " + url : ""));
+      } catch (error) {
+        new Notice("Cookies: " + error.message);
+      }
+    };
+
+    const doScreenshot = async () => {
+      try {
+        if (typeof webview.capturePage !== "function") {
+          new Notice("Screenshot unavailable for this webview");
+          return;
+        }
+        const image = await webview.capturePage();
+        const png = image.toPNG();
+        const folder = "Foxidian/screenshots";
+        if (!(await this.app.vault.adapter.exists("Foxidian"))) await this.app.vault.adapter.mkdir("Foxidian");
+        if (!(await this.app.vault.adapter.exists(folder))) await this.app.vault.adapter.mkdir(folder);
+        const file = folder + "/" + found.id + "-" + stampFile() + ".png";
+        await this.app.vault.adapter.writeBinary(file, png);
+        try {
+          const electron = require("electron");
+          const clip = electron.clipboard || (electron.remote && electron.remote.clipboard);
+          if (clip && typeof clip.writeImage === "function") clip.writeImage(image);
+        } catch (error) {
+          // Clipboard image is best-effort; vault file is the source of truth.
+        }
+        new Notice("Screenshot → " + file);
+      } catch (error) {
+        new Notice("Screenshot: " + error.message);
+      }
+    };
+
+    const doClearCookies = async () => {
       try {
         const session = sessionApi().fromPartition(rules.partitionOf(found.id));
         await session.clearStorageData();
         new Notice("Cookies / storage cleared for " + found.name);
         navigateWebview(webview, BLANK);
         input.value = "";
-        status.setText("Empty session - " + profile.name);
+        status.setText("Empty session - " + (rules.profileById(this.plugin.settings, found.profileId) || profile).name);
       } catch (error) {
         new Notice("Cookies : " + error.message);
       }
-    });
+    };
 
-    devtools.addEventListener("click", () => {
+    const doDevtools = () => {
       try {
         if (typeof webview.openDevTools === "function") webview.openDevTools();
         else new Notice("DevTools unavailable for this webview");
       } catch (error) {
         new Notice("DevTools : " + error.message);
       }
+    };
+
+    const doUserAgent = () => {
+      new UserAgentModal(this.app, found.userAgent || "", async (value) => {
+        found.userAgent = value;
+        await this.plugin.saveSettings(false, { quiet: true });
+        applyUserAgent(webview, found.userAgent);
+        new Notice(found.userAgent ? "User-Agent saved" : "User-Agent reset to default");
+        try {
+          const url = currentUrl();
+          if (url && url !== BLANK) webview.reload();
+        } catch (error) {
+          console.error(error);
+        }
+      }).open();
+    };
+
+    const openToolsMenu = (event) => {
+      const menu = new Menu();
+      menu.addItem((item) =>
+        item.setTitle("Copy Cookie header").setIcon("clipboard-copy").onClick(() => {
+          doExportCookies();
+        })
+      );
+      menu.addItem((item) =>
+        item.setTitle("Copy cookies (JSON)").setIcon("file-json").onClick(() => {
+          doExportCookiesJson();
+        })
+      );
+      menu.addItem((item) =>
+        item.setTitle("Screenshot").setIcon("camera").onClick(() => {
+          doScreenshot();
+        })
+      );
+      menu.addSeparator();
+      menu.addItem((item) =>
+        item.setTitle("User-Agent…").setIcon("smartphone").onClick(() => {
+          doUserAgent();
+        })
+      );
+      menu.addItem((item) =>
+        item.setTitle("Clear cookies").setIcon("trash-2").onClick(() => {
+          doClearCookies();
+        })
+      );
+      menu.addSeparator();
+      menu.addItem((item) =>
+        item.setTitle("DevTools").setIcon("bug").onClick(() => {
+          doDevtools();
+        })
+      );
+      menu.showAtMouseEvent(event);
+    };
+
+    more.addEventListener("click", (event) => {
+      event.preventDefault();
+      openToolsMenu(event);
+    });
+    more.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      openToolsMenu(event);
     });
 
     input.focus();
@@ -447,7 +730,7 @@ class FoxidianSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Burp")
-      .setDesc("Proxy listener. Default in the panel: 127.0.0.1:8081.")
+      .setDesc("Proxy listener. Default in the panel: 127.0.0.1:8080.")
       .addText((text) =>
         text.setValue(plugin.settings.burpHost).onChange(async (value) => {
           if (!rules.validHost(value.trim())) return;
@@ -562,25 +845,38 @@ class PanelView extends ItemView {
     root.empty();
     root.addClass("fox-panel");
 
-    const listen = root.createDiv({ cls: "fox-listen is-skip" });
+    const listenWrap = root.createDiv("fox-listen-wrap");
+    const listen = listenWrap.createDiv({ cls: "fox-listen is-skip" });
     listen.createSpan({ cls: "fox-dot" });
-    this.listenLabel = listen.createSpan({ text: "Listener…" });
+    this.listenLabel = listen.createSpan({ cls: "fox-listen-text", text: "Listener…" });
     this.listenRow = listen;
+    const recheck = listenWrap.createEl("button", {
+      cls: "clickable-icon fox-icon-btn fox-listen-reload",
+      attr: { type: "button", "aria-label": "Recheck listener", title: "Recheck listener" },
+    });
+    setIcon(recheck, "refresh-cw");
+    recheck.addEventListener("click", async () => {
+      recheck.toggleClass("is-spinning", true);
+      try {
+        await this.refreshListener();
+      } finally {
+        window.setTimeout(() => recheck.toggleClass("is-spinning", false), 400);
+      }
+    });
 
-    root.createDiv({ cls: "fox-label", text: "Web viewer profile" });
     const profiles = root.createDiv("fox-profiles");
     const activeId = plugin.settings.enabled ? plugin.settings.defaultProfile : "direct";
     for (const profile of rules.profilesOf(plugin.settings)) {
       const btn = profiles.createEl("button", {
         text: profile.name,
-        cls: profile.id === activeId ? "is-active" : "",
+        cls: "fox-chip" + (profile.id === activeId ? " is-active" : ""),
       });
       btn.onclick = () => plugin.activateProfile(profile.id);
     }
 
     const endpoint = root.createDiv("fox-burp");
-    const host = endpoint.createEl("input", { type: "text", value: plugin.settings.burpHost });
-    const port = endpoint.createEl("input", { type: "text", value: String(plugin.settings.burpPort) });
+    const host = endpoint.createEl("input", { type: "text", value: plugin.settings.burpHost, attr: { title: "Burp host" } });
+    const port = endpoint.createEl("input", { type: "text", value: String(plugin.settings.burpPort), attr: { title: "Burp port" } });
     host.spellcheck = false;
     port.spellcheck = false;
     host.addEventListener("change", () => {
@@ -606,35 +902,25 @@ class PanelView extends ItemView {
     if (plugin.settings.rules.length) {
       root.createEl("p", {
         cls: "fox-note",
-        text: plugin.settings.rules.length + " active rule(s) - details in settings.",
+        text: plugin.settings.rules.length + " rule(s)",
       });
     }
 
-    root.createDiv({ cls: "fox-label", text: "Containers" });
     const list = root.createDiv("fox-list");
     if (!plugin.settings.containers.length) {
-      list.createEl("p", { cls: "fox-note", text: "No containers yet. Add one below." });
+      list.createEl("p", { cls: "fox-note", text: "No containers yet." });
     }
     for (const container of plugin.settings.containers) {
       const row = list.createDiv("fox-row");
-      const color = row.createEl("input");
-      color.type = "color";
-      color.value = container.color || rules.colorFor(container.id);
-      color.title = "Container color";
-      color.className = "fox-color";
-      color.addEventListener("input", () => {
-        if (!rules.validColor(color.value)) return;
-        container.color = color.value;
-        plugin.paintContainer(container);
-      });
-      color.addEventListener("change", async () => {
-        if (!rules.validColor(color.value)) {
-          color.value = container.color || rules.colorFor(container.id);
-          return;
-        }
-        container.color = color.value;
-        await plugin.saveSettings(false, { quiet: true });
-        plugin.paintContainer(container);
+      const initial = container.color || rules.colorFor(container.id);
+      const color = colorSwatch(row, initial, "Container color");
+      color.addEventListener("click", () => {
+        new ColorModal(plugin.app, container.color || rules.colorFor(container.id), async (hex, live) => {
+          container.color = hex;
+          color.style.background = hex;
+          plugin.paintContainer(container);
+          if (!live) await plugin.saveSettings(false, { quiet: true });
+        }).open();
       });
       row.createSpan({ cls: "fox-name", text: container.name });
       const select = row.createEl("select");
@@ -648,20 +934,25 @@ class PanelView extends ItemView {
         await plugin.saveSettings(false);
         await plugin.refreshContainer(container);
       };
-      row.createEl("button", { text: "Open" }).onclick = () => plugin.openContainer(container);
-      row.createEl("button", { text: "×" }).onclick = () => {
+      const open = row.createEl("button", { text: "Open", cls: "fox-mini" });
+      open.onclick = () => plugin.openContainer(container);
+      const drop = row.createEl("button", { text: "×", cls: "fox-mini fox-mini-danger" });
+      drop.onclick = () => {
         plugin.settings.containers = plugin.settings.containers.filter((item) => item.id !== container.id);
         plugin.saveSettings(false);
       };
     }
 
     const add = root.createDiv("fox-add");
-    const name = add.createEl("input", { type: "text", placeholder: "Container name" });
-    const addColor = add.createEl("input");
-    addColor.type = "color";
-    addColor.value = rules.colorFor("nouveau");
-    addColor.title = "Color";
-    addColor.className = "fox-color";
+    const name = add.createEl("input", { type: "text", placeholder: "New container" });
+    let addColorValue = rules.colorFor("nouveau");
+    const addColor = colorSwatch(add, addColorValue, "Color");
+    addColor.addEventListener("click", () => {
+      new ColorModal(plugin.app, addColorValue, (hex) => {
+        addColorValue = hex;
+        addColor.style.background = hex;
+      }).open();
+    });
     const chosen = add.createEl("select");
     for (const item of rules.profilesOf(plugin.settings)) {
       const option = chosen.createEl("option", { text: item.name });
@@ -673,7 +964,7 @@ class PanelView extends ItemView {
       if (!raw) return;
       let container;
       try {
-        container = rules.makeContainer(raw, chosen.value, addColor.value);
+        container = rules.makeContainer(raw, chosen.value, addColorValue);
       } catch (error) {
         new Notice(error.message);
         return;
@@ -687,7 +978,7 @@ class PanelView extends ItemView {
       await plugin.saveSettings(false);
       await plugin.openContainer(container);
     };
-    add.createEl("button", { text: "Create", cls: "mod-cta" }).onclick = submit;
+    add.createEl("button", { text: "+", cls: "mod-cta fox-mini" }).onclick = submit;
     name.addEventListener("keydown", (event) => {
       if (event.key === "Enter") submit();
     });
@@ -707,16 +998,17 @@ class PanelView extends ItemView {
     this.listenRow.removeClass("is-skip");
     if (result.skip) {
       this.listenRow.addClass("is-skip");
-      this.listenLabel.setText("Direct - no listener");
+      this.listenLabel.setText("Direct");
       return;
     }
+    const endpoint = result.host + ":" + result.port;
     if (result.ok) {
       this.listenRow.addClass("is-up");
-      this.listenLabel.setText((profile?.name || "Proxy") + " " + result.host + ":" + result.port + " - OK");
+      this.listenLabel.setText((profile?.name || "Proxy") + " " + endpoint + " · up");
       return;
     }
     this.listenRow.addClass("is-down");
-    this.listenLabel.setText((profile?.name || "Proxy") + " " + result.host + ":" + result.port + " - down");
+    this.listenLabel.setText((profile?.name || "Proxy") + " " + endpoint + " · down");
   }
 }
 
@@ -850,12 +1142,21 @@ class FoxidianPlugin extends Plugin {
   }
 
   async openPanel() {
-    let leaf = this.app.workspace.getLeavesOfType(PANEL)[0];
+    const ws = this.app.workspace;
+    // Prefer a compact right-sidebar leaf (getRightLeaf(true) opens a huge split).
+    if (typeof ws.ensureSideLeaf === "function") {
+      const side = ws.ensureSideLeaf(PANEL, "right", { active: true, reveal: true });
+      if (side) {
+        ws.revealLeaf(side);
+        return;
+      }
+    }
+    let leaf = ws.getLeavesOfType(PANEL)[0];
     if (!leaf) {
-      leaf = this.app.workspace.getRightLeaf(true);
+      leaf = ws.getRightLeaf(false) || ws.getRightLeaf(true);
       await leaf.setViewState({ type: PANEL, active: true });
     }
-    this.app.workspace.revealLeaf(leaf);
+    ws.revealLeaf(leaf);
   }
 
   partition() {
@@ -957,6 +1258,7 @@ class FoxidianPlugin extends Plugin {
     const leaf = this.app.workspace.getLeavesOfType(VIEW).find((item) => item.view?.containerId === container.id);
     if (!leaf) return;
     await this.applyProfile(rules.partitionOf(container.id), container.profileId);
+    if (leaf.view?.paintChrome) leaf.view.paintChrome(container);
     if (leaf.view?.reloadIfOpen) await leaf.view.reloadIfOpen();
   }
 }

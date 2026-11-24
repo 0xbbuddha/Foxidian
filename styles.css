@@ -6,17 +6,28 @@
   overflow: hidden;
 }
 
+.workspace-leaf-content[data-type="foxidian-container"].fox-leaf {
+  box-shadow: inset 3px 0 0 var(--fox-color, var(--text-accent));
+}
+
 .fox-chrome {
   flex: 0 0 auto;
-  border-bottom: 1px solid var(--background-modifier-border);
-  background: var(--background-secondary);
+  border-bottom: 1px solid color-mix(in srgb, var(--fox-color, var(--text-accent)) 35%, var(--background-modifier-border));
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--fox-color, var(--text-accent)) 14%, transparent),
+      transparent 42%
+    ),
+    var(--background-secondary);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--fox-color, var(--text-accent)) 18%, transparent);
 }
 
 .fox-banner {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 10px 0;
+  padding: 3px 10px 0;
   min-height: 0;
 }
 
@@ -41,7 +52,45 @@
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 4px 6px 6px;
+  padding: 3px 6px 5px;
+}
+
+.fox-proxy-pill {
+  flex: 0 0 auto;
+  flex-shrink: 0;
+  width: max-content;
+  max-width: none;
+  min-width: 4.5em;
+  height: 24px;
+  margin: 0 2px 0 4px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 24px;
+  white-space: nowrap;
+  overflow: visible;
+  text-overflow: clip;
+  cursor: pointer;
+  color: var(--text-normal);
+  background: var(--background-primary);
+  box-shadow: inset 0 0 0 1px var(--background-modifier-border);
+}
+
+.fox-proxy-pill.is-proxy {
+  color: var(--fox-color, var(--text-accent));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fox-color, var(--text-accent)) 55%, transparent);
+  background: color-mix(in srgb, var(--fox-color, var(--text-accent)) 12%, var(--background-primary));
+}
+
+.fox-proxy-pill.is-direct {
+  color: var(--text-muted);
+}
+
+.fox-proxy-pill:hover {
+  filter: brightness(1.06);
 }
 
 .fox-address {
@@ -80,31 +129,40 @@
   }
 }
 
-.fox-tools {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 0 6px 6px;
+.fox-ua-modal {
+  width: 100%;
+  margin-top: 8px;
+  font-family: var(--font-monospace);
+  font-size: 12px;
 }
 
-.fox-ua {
+.fox-ua-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.fox-listen-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.fox-listen-wrap .fox-listen {
   flex: 1;
   min-width: 0;
-  height: 26px;
-  margin-right: 4px;
-  padding: 0 10px;
-  border: none;
-  border-radius: 8px;
-  background: var(--background-primary);
-  box-shadow: inset 0 0 0 1px var(--background-modifier-border);
-  font-size: 11px;
-  font-family: var(--font-monospace);
+}
+
+.fox-listen-reload.is-spinning svg {
+  animation: fox-spin 0.8s linear infinite;
 }
 
 .fox-frame {
   flex: 1 1 auto;
   min-height: 0;
   position: relative;
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--fox-color, var(--text-accent)) 55%, transparent);
 }
 
 .fox-wv {
@@ -123,20 +181,51 @@
   box-shadow: inset 3px 0 0 var(--fox-color, var(--text-accent));
 }
 
+.workspace-leaf-content[data-type="foxidian-panel"] {
+  overflow: auto;
+}
+
 .fox-panel {
-  padding: 12px;
+  padding: 8px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   user-select: text;
   overflow: auto;
+  min-height: 0;
 }
 
 .fox-listen {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: var(--font-ui-small);
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--background-primary);
+  box-shadow: inset 3px 0 0 var(--text-muted);
+}
+
+.fox-listen-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fox-listen.is-up {
+  box-shadow: inset 3px 0 0 #16a34a;
+  color: #16a34a;
+}
+
+.fox-listen.is-down {
+  box-shadow: inset 3px 0 0 #e11d48;
+  color: #e11d48;
+}
+
+.fox-listen.is-skip {
+  color: var(--text-muted);
 }
 
 .fox-listen.is-up .fox-dot {
@@ -153,26 +242,43 @@
 
 .fox-profiles {
   display: flex;
-  gap: 6px;
+  gap: 4px;
   flex-wrap: wrap;
   align-items: center;
 }
 
-.fox-profiles button.is-active {
+.fox-chip {
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.fox-profiles button.is-active,
+.fox-chip.is-active {
   background-color: var(--interactive-accent);
   color: var(--text-on-accent);
 }
 
 .fox-label {
-  margin-top: 8px;
-  font-size: var(--font-ui-smaller);
+  margin-top: 2px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   color: var(--text-muted);
 }
 
 .fox-note {
   margin: 0;
   color: var(--text-muted);
-  font-size: var(--font-ui-smaller);
+  font-size: 11px;
+}
+
+.fox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .fox-row,
@@ -180,11 +286,11 @@
 .fox-burp {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
 
 .fox-row {
-  margin-bottom: 6px;
+  padding: 2px 0;
 }
 
 .fox-name {
@@ -192,40 +298,110 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-size: 12px;
 }
 
 .fox-row select,
 .fox-add select {
-  width: 6.5em;
+  width: 6.75em;
+  min-width: 6.75em;
   flex: 0 0 auto;
+  height: 24px;
+  font-size: 12px;
 }
 
 .fox-add input[type="text"],
 .fox-burp input {
   flex: 1;
   min-width: 0;
+  height: 24px;
+  font-size: 12px;
 }
 
 .fox-burp input:last-child {
-  width: 5.5em;
+  width: 4.5em;
   flex: 0 0 auto;
 }
 
+.fox-mini {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.fox-mini-danger {
+  color: var(--text-muted);
+}
+
 .fox-dot {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   flex: 0 0 auto;
 }
 
 .fox-color {
-  width: 1.8em;
-  height: 1.8em;
+  width: 1.5em;
+  height: 1.5em;
+  padding: 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 50%;
+  flex: 0 0 auto;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+
+.fox-color:hover {
+  filter: brightness(1.08);
+}
+
+.modal.fox-color-modal .modal-content {
+  min-width: min(320px, 90vw);
+}
+
+.fox-color-preview {
+  height: 48px;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  border: 1px solid var(--background-modifier-border);
+}
+
+.fox-color-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.fox-color-swatch {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--background-modifier-border);
+  cursor: pointer;
+}
+
+.fox-color-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fox-color-picker {
+  width: 48px;
+  height: 32px;
   padding: 0;
   border: none;
   background: transparent;
-  flex: 0 0 auto;
   cursor: pointer;
+}
+
+.fox-color-hex {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-monospace);
+  font-size: 12px;
 }
 
 .fox-suggest {

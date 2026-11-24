@@ -8,9 +8,13 @@ Desktop only. It leans on Obsidian’s Electron sessions, not a blessed public A
 
 ## What you get
 
-- A side panel with one-click profiles: Direct, Burp, plus whatever you add
-- A listener pill that shows whether the active proxy answers (saves you from `ERR_TUNNEL_CONNECTION_FAILED` because Burp was on another port)
-- Isolated containers: pick a color, set a User-Agent, clear cookies, open DevTools
+- A compact right-sidebar panel with one-click profiles: Direct, Burp, plus whatever you add
+- A listener pill (with manual refresh) that shows whether the active proxy answers
+- Isolated containers: color, User-Agent, clear cookies, DevTools, screenshots
+- In-container proxy pill to cycle Direct / Burp / extras without leaving the page
+- Address bar that searches (DuckDuckGo) or opens URLs, same idea as Obsidian’s Web viewer
+- Copy Cookie header (or full JSON) for Burp / curl
+- Clear HTTPS cert hints when Burp’s CA is missing
 - Optional per-site rules in the settings tab if you want finer routing
 
 Obsidian’s Web viewer (external links) and Foxidian containers do **not** share a session. On purpose.
@@ -21,10 +25,10 @@ Clone into the vault’s `.obsidian/plugins/` folder, enable **Foxidian**, reloa
 
 ```bash
 cd /path/to/vault/.obsidian/plugins
-git clone <repo-url> foxidian
+git clone https://github.com/0xbbuddha/Foxidian.git foxidian
 ```
 
-Default Burp endpoint in the panel is `127.0.0.1:8081`. Change it if yours listens elsewhere.
+Default Burp endpoint in the panel is `127.0.0.1:8080`. Change it if yours listens elsewhere.
 
 ## License
 
