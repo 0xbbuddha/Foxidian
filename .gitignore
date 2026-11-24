@@ -1,0 +1,11 @@
+# Réglages / runtime locaux Obsidian
+data.json
+proxy.pac
+
+# Divers
+node_modules/
+.DS_Store
+*.log
+*.swp
+.idea/
+.vscode/
