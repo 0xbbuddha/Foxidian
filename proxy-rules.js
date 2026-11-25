@@ -1,6 +1,6 @@
 "use strict";
 
-const RESERVED = new Set(["direct", "burp"]);
+const RESERVED = new Set(["direct", "proxy"]);
 
 const COLORS = [
   "#e11d48",
@@ -54,20 +54,53 @@ function colorFor(id) {
   return COLORS[hash % COLORS.length];
 }
 
+function proxyEndpoint(settings) {
+  const host = settings.proxyHost || settings.burpHost || "127.0.0.1";
+  const port = Number(settings.proxyPort != null ? settings.proxyPort : settings.burpPort != null ? settings.burpPort : 8080);
+  return { host, port };
+}
+
 function profilesOf(settings) {
-  const burp = {
-    id: "burp",
-    name: "Burp",
+  const endpoint = proxyEndpoint(settings);
+  const proxy = {
+    id: "proxy",
+    name: "Proxy",
     type: "http",
-    host: settings.burpHost,
-    port: settings.burpPort,
+    host: endpoint.host,
+    port: endpoint.port,
   };
-  return [{ id: "direct", name: "Direct", type: "direct" }, burp, ...(settings.extras || [])];
+  return [{ id: "direct", name: "Direct", type: "direct" }, proxy, ...(settings.extras || [])];
+}
+
+function normalizeProfileId(id) {
+  const key = String(id || "").toLowerCase();
+  // Legacy built-in id from earlier Foxidian versions.
+  return key === "burp" ? "proxy" : key;
 }
 
 function profileById(settings, id) {
-  const key = String(id || "").toLowerCase();
+  const key = normalizeProfileId(id);
   return profilesOf(settings).find((p) => p.id === key) || null;
+}
+
+// Map old burp* settings / profile ids onto the generic proxy profile.
+function migrateSettings(saved) {
+  if (!saved || typeof saved !== "object") return {};
+  const next = { ...saved };
+  if (next.proxyHost == null && next.burpHost != null) next.proxyHost = next.burpHost;
+  if (next.proxyPort == null && next.burpPort != null) next.proxyPort = next.burpPort;
+  delete next.burpHost;
+  delete next.burpPort;
+  if (normalizeProfileId(next.defaultProfile) === "proxy") next.defaultProfile = "proxy";
+  next.containers = (next.containers || []).map((item) => ({
+    ...item,
+    profileId: normalizeProfileId(item.profileId) || "proxy",
+  }));
+  next.rules = (next.rules || []).map((rule) => ({
+    ...rule,
+    profile: normalizeProfileId(rule.profile),
+  }));
+  return next;
 }
 
 function slug(raw) {
@@ -250,7 +283,7 @@ function makeContainer(name, profileId, color, userAgent) {
   return {
     id,
     name: id,
-    profileId: profileId || "burp",
+    profileId: normalizeProfileId(profileId) || "proxy",
     color: validColor(color) ? color : colorFor(id),
     userAgent: typeof userAgent === "string" ? userAgent : "",
   };
@@ -287,7 +320,7 @@ function parseContainers(text, settings) {
     const parts = line.split(/\s+/);
     const last = profileById(settings, parts[parts.length - 1]);
     const named = parts.length > 1 && last ? parts.slice(0, -1).join(" ") : line;
-    const profile = parts.length > 1 && last ? last : profileById(settings, "burp");
+    const profile = parts.length > 1 && last ? last : profileById(settings, "proxy");
     if (!profile) throw new Error(line + ": unknown profile");
     const container = makeContainer(named, profile.id);
     if (seen.has(container.id)) throw new Error(container.id + ": already exists");
@@ -310,13 +343,14 @@ function formatContainers(containers) {
 }
 
 function routeForProfile(settings, profileId) {
+  const endpoint = proxyEndpoint(settings);
   return {
-    enabled: profileId !== "direct",
+    enabled: normalizeProfileId(profileId) !== "direct",
     interceptCerts: settings.interceptCerts,
-    burpHost: settings.burpHost,
-    burpPort: settings.burpPort,
+    proxyHost: endpoint.host,
+    proxyPort: endpoint.port,
     bypass: settings.bypass,
-    defaultProfile: profileId,
+    defaultProfile: normalizeProfileId(profileId),
     extras: settings.extras,
     rules: [],
   };
@@ -336,6 +370,9 @@ module.exports = {
   colorFor,
   profilesOf,
   profileById,
+  normalizeProfileId,
+  migrateSettings,
+  proxyEndpoint,
   slug,
   resolveProfile,
   proxyToken,

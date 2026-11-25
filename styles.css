@@ -283,7 +283,7 @@
 
 .fox-row,
 .fox-add,
-.fox-burp {
+.fox-endpoint {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -311,14 +311,14 @@
 }
 
 .fox-add input[type="text"],
-.fox-burp input {
+.fox-endpoint input {
   flex: 1;
   min-width: 0;
   height: 24px;
   font-size: 12px;
 }
 
-.fox-burp input:last-child {
+.fox-endpoint input:last-child {
   width: 4.5em;
   flex: 0 0 auto;
 }

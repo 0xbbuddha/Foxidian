@@ -1,9 +1,9 @@
 {
   "id": "foxidian",
   "name": "Foxidian",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "minAppVersion": "1.5.0",
-  "description": "FoxyProxy for Obsidian: proxy profiles, Web viewer through Burp, isolated colored containers.",
+  "description": "FoxyProxy for Obsidian: proxy profiles, Web viewer through an HTTP interceptor, isolated colored containers.",
   "author": "",
   "isDesktopOnly": true
 }

@@ -37,10 +37,10 @@ const BLANK = "about:blank";
 const DEFAULTS = {
   enabled: false,
   interceptCerts: true,
-  burpHost: "127.0.0.1",
-  burpPort: 8080,
+  proxyHost: "127.0.0.1",
+  proxyPort: 8080,
   bypass: ["localhost", "127.0.0.1", "::1"],
-  defaultProfile: "burp",
+  defaultProfile: "proxy",
   extras: [],
   rules: [],
   containers: [],
@@ -83,7 +83,7 @@ function normalizeContainers(list) {
     return {
       id,
       name: item.name || id,
-      profileId: item.profileId || "burp",
+      profileId: rules.normalizeProfileId(item.profileId) || "proxy",
       color: rules.validColor(item.color) ? item.color : rules.colorFor(id),
       userAgent: typeof item.userAgent === "string" ? item.userAgent : "",
     };
@@ -455,9 +455,9 @@ class ContainerView extends ItemView {
       if (!event.isMainFrame || event.errorCode === -3) return;
       const desc = event.errorDescription || String(event.errorCode);
       if (isCertFailure(event.errorCode, desc)) {
-        status.setText("Cert error - import Burp CA");
+        status.setText("Cert error - import proxy CA");
         new Notice(
-          "HTTPS certificate rejected. Export Burp’s CA (Proxy → Proxy settings → Import / export CA) and trust it in the OS, or enable “Trust interceptor certificate” in Foxidian settings."
+          "HTTPS certificate rejected. Export your interceptor CA (Burp, Caido, ZAP, mitmproxy…) and trust it in the OS, or enable “Trust interceptor certificate” in Foxidian settings."
         );
         return;
       }
@@ -729,26 +729,26 @@ class FoxidianSettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
-      .setName("Burp")
-      .setDesc("Proxy listener. Default in the panel: 127.0.0.1:8080.")
+      .setName("Proxy")
+      .setDesc("HTTP interceptor listener (Burp, Caido, ZAP…). Default: 127.0.0.1:8080.")
       .addText((text) =>
-        text.setValue(plugin.settings.burpHost).onChange(async (value) => {
+        text.setValue(plugin.settings.proxyHost).onChange(async (value) => {
           if (!rules.validHost(value.trim())) return;
-          plugin.settings.burpHost = value.trim();
+          plugin.settings.proxyHost = value.trim();
           await plugin.saveSettings(false);
         })
       )
       .addText((text) =>
-        text.setValue(String(plugin.settings.burpPort)).onChange(async (value) => {
+        text.setValue(String(plugin.settings.proxyPort)).onChange(async (value) => {
           if (!rules.validPort(value)) return;
-          plugin.settings.burpPort = Number(value);
+          plugin.settings.proxyPort = Number(value);
           await plugin.saveSettings(false);
         })
       );
 
     new Setting(containerEl)
       .setName("Trust interceptor certificate")
-      .setDesc("For HTTP profiles (Burp). Any proxy on that port is trusted while this is on.")
+      .setDesc("For HTTP profiles. Trusts the upstream proxy’s TLS cert while this is on (any tool on that port).")
       .addToggle((toggle) =>
         toggle.setValue(plugin.settings.interceptCerts).onChange(async (value) => {
           plugin.settings.interceptCerts = value;
@@ -771,7 +771,7 @@ class FoxidianSettingTab extends PluginSettingTab {
         plugin.settings.containers = plugin.settings.containers.filter((item) =>
           rules.profileById(plugin.settings, item.profileId)
         );
-        if (!rules.profileById(plugin.settings, plugin.settings.defaultProfile)) plugin.settings.defaultProfile = "burp";
+        if (!rules.profileById(plugin.settings, plugin.settings.defaultProfile)) plugin.settings.defaultProfile = "proxy";
       }
     );
 
@@ -874,28 +874,36 @@ class PanelView extends ItemView {
       btn.onclick = () => plugin.activateProfile(profile.id);
     }
 
-    const endpoint = root.createDiv("fox-burp");
-    const host = endpoint.createEl("input", { type: "text", value: plugin.settings.burpHost, attr: { title: "Burp host" } });
-    const port = endpoint.createEl("input", { type: "text", value: String(plugin.settings.burpPort), attr: { title: "Burp port" } });
+    const endpoint = root.createDiv("fox-endpoint");
+    const host = endpoint.createEl("input", {
+      type: "text",
+      value: plugin.settings.proxyHost,
+      attr: { title: "Proxy host" },
+    });
+    const port = endpoint.createEl("input", {
+      type: "text",
+      value: String(plugin.settings.proxyPort),
+      attr: { title: "Proxy port" },
+    });
     host.spellcheck = false;
     port.spellcheck = false;
     host.addEventListener("change", () => {
       const value = host.value.trim();
       if (!rules.validHost(value)) {
         new Notice("Invalid host");
-        host.value = plugin.settings.burpHost;
+        host.value = plugin.settings.proxyHost;
         return;
       }
-      plugin.settings.burpHost = value;
+      plugin.settings.proxyHost = value;
       plugin.saveSettings(false);
     });
     port.addEventListener("change", () => {
       if (!rules.validPort(port.value)) {
         new Notice("Invalid port");
-        port.value = String(plugin.settings.burpPort);
+        port.value = String(plugin.settings.proxyPort);
         return;
       }
-      plugin.settings.burpPort = Number(port.value);
+      plugin.settings.proxyPort = Number(port.value);
       plugin.saveSettings(false);
     });
 
@@ -958,7 +966,7 @@ class PanelView extends ItemView {
       const option = chosen.createEl("option", { text: item.name });
       option.value = item.id;
     }
-    chosen.value = "burp";
+    chosen.value = "proxy";
     const submit = async () => {
       const raw = name.value.trim();
       if (!raw) return;
@@ -1015,9 +1023,18 @@ class PanelView extends ItemView {
 class FoxidianPlugin extends Plugin {
   async onload() {
     rules = loadRules(this);
-    const saved = (await this.loadData()) || {};
+    const raw = (await this.loadData()) || {};
+    const saved = rules.migrateSettings(raw);
+    const migrated =
+      raw.burpHost != null ||
+      raw.burpPort != null ||
+      raw.defaultProfile === "burp" ||
+      (raw.containers || []).some((item) => item.profileId === "burp") ||
+      (raw.rules || []).some((rule) => rule.profile === "burp");
     this.settings = { ...DEFAULTS, ...saved };
     this.settings.containers = normalizeContainers(this.settings.containers);
+    this.settings.defaultProfile = rules.normalizeProfileId(this.settings.defaultProfile) || "proxy";
+    if (migrated) await this.saveData(this.settings);
     this.panels = new Set();
     this.probeTimer = null;
 
@@ -1100,7 +1117,7 @@ class FoxidianPlugin extends Plugin {
 
   async toggle() {
     if (this.settings.enabled) await this.activateProfile("direct");
-    else await this.activateProfile(this.settings.defaultProfile === "direct" ? "burp" : this.settings.defaultProfile);
+    else await this.activateProfile(this.settings.defaultProfile === "direct" ? "proxy" : this.settings.defaultProfile);
   }
 
   async activateProfile(profileId) {
@@ -1189,7 +1206,7 @@ class FoxidianPlugin extends Plugin {
     try {
       this.bindCerts(session, route);
     } catch (error) {
-      new Notice("Certificate bypass failed (" + error.message + "). Import the Burp CA if HTTPS breaks.");
+      new Notice("Certificate bypass failed (" + error.message + "). Import your proxy CA if HTTPS breaks.");
     }
     if (typeof session.closeAllConnections === "function") await session.closeAllConnections();
   }
